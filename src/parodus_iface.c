@@ -254,8 +254,6 @@ static char* convert_internal_to_webpa_ext(const char* inJson, cJSON* originalRe
          /* Place grouped dataType after count & message for visibility */
          cJSON_AddNumberToObject(grouped, "dataType", 11);
          cJSON_AddItemToArray(arr, grouped);
-         /* Add single top-level message for wildcard */
-         cJSON_AddStringToObject(out, "message", (status->valueint == 200 || status->valueint == 207) ? "Success" : "Failure");
       } else {
          cJSON* child = results->child;
          while (child) {
@@ -291,11 +289,6 @@ static char* convert_internal_to_webpa_ext(const char* inJson, cJSON* originalRe
       cJSON_AddItemToArray(arr, paramObj);
       topLevelCount = 1;
       cJSON_AddStringToObject(out, "message", (status->valueint == 200) ? "Success" : "Failure");
-   }
-   if (topLevelCount > 1) {
-      // cJSON_AddStringToObject(out, "name", wildcardName);
-      cJSON_AddNumberToObject(out, "dataType", 11);
-      cJSON_AddNumberToObject(out, "parameterCount", topLevelCount);
    }
    char* outStr = cJSON_PrintUnformatted(out);
    cJSON_Delete(out);
@@ -346,10 +339,10 @@ int parodus_iface_run(void) {
                free(jsonBuf);
                translate_webpa_request(root, msg->u.crud.transaction_uuid);
                cJSON* resp = protocol_handle_request(root);
-               if (root) cJSON_Delete(root);
                if (resp) {
                   char* outInternal = cJSON_PrintUnformatted(resp);
                   char* out = convert_internal_to_webpa_ext(outInternal, root);
+               if (root) cJSON_Delete(root);
                   if (outInternal) free(outInternal);
                   if (out) {
                      wrp_msg_t* reply = build_reply_retreive(msg, service_name, out);
@@ -374,10 +367,10 @@ int parodus_iface_run(void) {
                free(jsonBuf);
                translate_webpa_request(root, msg->u.req.transaction_uuid);
                cJSON* resp = protocol_handle_request(root);
-               if (root) cJSON_Delete(root);
                if (resp) {
                   char* outInternal = cJSON_PrintUnformatted(resp);
                   char* out = convert_internal_to_webpa_ext(outInternal, root);
+               if (root) cJSON_Delete(root);
                   if (outInternal) free(outInternal);
                   if (out) {
                      wrp_msg_t* reply = build_reply_req(msg, service_name, out);
@@ -402,10 +395,10 @@ int parodus_iface_run(void) {
                free(jsonBuf);
                translate_webpa_request(root, msg->u.event.transaction_uuid);
                cJSON* resp = protocol_handle_request(root);
-               if (root) cJSON_Delete(root);
                if (resp) {
                   char* outInternal = cJSON_PrintUnformatted(resp);
                   char* out = convert_internal_to_webpa_ext(outInternal, root);
+               if (root) cJSON_Delete(root);
                   if (outInternal) free(outInternal);
                   if (out) {
                      wrp_msg_t* reply = build_reply_event(msg, service_name, out);
