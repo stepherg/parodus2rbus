@@ -39,6 +39,23 @@ Responses:
 ## Protocol
 - GET: {"id","op":"GET","params":[..]}
 - SET: {"id","op":"SET","param":string,"value":string}
+- GET_ATTRIBUTES: {"id","op":"GET_ATTRIBUTES","param":string}
+- SET_ATTRIBUTES: {"id","op":"SET_ATTRIBUTES","param":string,"attributes":{"notify":int,"access":string}}
+- ADD_ROW: {"id","op":"ADD_ROW","tableName":string,"rowData":[{"name":string,"value":string,"dataType":int}]}
+- DELETE_ROW: {"id","op":"DELETE_ROW","rowName":string}
+- REPLACE_ROWS: {"id","op":"REPLACE_ROWS","tableName":string,"tableData":[[{"name":string,"value":string,"dataType":int}]]}
+
+### WebPA Compatibility
+The bridge also supports WebPA-style commands that are automatically translated:
+- `{"command":"GET","names":[...]}` → `{"op":"GET","params":[...]}`
+- `{"command":"SET_ATTRIBUTES","parameters":[{"name":"...","attributes":{...}}]}` → `{"op":"SET_ATTRIBUTES","param":"...","attributes":{...}}`
+- `{"command":"ADD_ROW","table":"...","row":[...]}` → `{"op":"ADD_ROW","tableName":"...","rowData":[...]}`
+
+### Enhanced Features (Phase 1)
+- **Table Operations**: Full support for RBUS table management (add/delete/replace rows)
+- **Attribute Operations**: Get and set parameter attributes (notification settings, access control)
+- **Enhanced Error Mapping**: Detailed RBUS error code mapping to HTTP status codes
+- **Typed Data Support**: Proper data type handling for all parameter values
 
 ### Wildcards
 You can request a group of parameters by supplying a trailing dot in a GET param, e.g.

@@ -35,10 +35,13 @@ void p2r_emit_event(const char* name, const char* payload_json) {
 static void handle_sig(int s) { (void)s; g_run = 0; }
 
 /* Translate WebPA style payloads (command/names/parameters) into internal op schema
- * Internal schema expects: { "id":"<id>", "op":"GET|SET|SUBSCRIBE|UNSUBSCRIBE", ... }
+ * Internal schema expects: { "id":"<id>", "op":"GET|SET|GET_ATTRIBUTES|SET_ATTRIBUTES|ADD_ROW|DELETE_ROW|REPLACE_ROWS|SUBSCRIBE|UNSUBSCRIBE", ... }
  * WebPA examples:
  *   {"names":["Device.DeviceInfo.X"],"command":"GET"}
  *   {"parameters":[{"name":"Device.Param","value":"123","dataType":0}],"command":"SET"}
+ *   {"command":"GET_ATTRIBUTES","names":["Device.Param"]}
+ *   {"command":"SET_ATTRIBUTES","parameters":[{"name":"Device.Param","attributes":{"notify":1,"access":"readWrite"}}]}
+ *   {"command":"ADD_ROW","table":"Device.IP.Interface.","row":[{"name":"Enable","value":"true","dataType":3}]}
  */
 static void translate_webpa_request(cJSON* root, const char* txn_id) {
    if (!root || !cJSON_IsObject(root)) return;
@@ -50,13 +53,22 @@ static void translate_webpa_request(cJSON* root, const char* txn_id) {
    if (!cJSON_GetObjectItem(root, "id") && txn_id) {
       cJSON_AddStringToObject(root, "id", txn_id);
    }
-   if (strcmp(command, "GET") == 0 || strcmp(command, "GET_ATTRIBUTES") == 0) {
+   if (strcmp(command, "GET") == 0) {
       cJSON* names = cJSON_GetObjectItem(root, "names");
       if (names && cJSON_IsArray(names)) {
          /* duplicate array so original remains if needed */
          cJSON* paramsCopy = cJSON_Duplicate(names, 1);
          if (paramsCopy) cJSON_AddItemToObject(root, "params", paramsCopy);
          cJSON_AddStringToObject(root, "op", "GET");
+      }
+   } else if (strcmp(command, "GET_ATTRIBUTES") == 0) {
+      cJSON* names = cJSON_GetObjectItem(root, "names");
+      if (names && cJSON_IsArray(names) && cJSON_GetArraySize(names) > 0) {
+         cJSON* first = cJSON_GetArrayItem(names, 0);
+         if (cJSON_IsString(first)) {
+            cJSON_AddStringToObject(root, "op", "GET_ATTRIBUTES");
+            cJSON_AddStringToObject(root, "param", first->valuestring);
+         }
       }
    } else if (strcmp(command, "SET") == 0) {
       cJSON* parameters = cJSON_GetObjectItem(root, "parameters");
@@ -71,6 +83,40 @@ static void translate_webpa_request(cJSON* root, const char* txn_id) {
          } else {
             cJSON_AddStringToObject(root, "op", "SET"); /* will fail validation later */
          }
+      }
+   } else if (strcmp(command, "SET_ATTRIBUTES") == 0) {
+      cJSON* parameters = cJSON_GetObjectItem(root, "parameters");
+      if (parameters && cJSON_IsArray(parameters) && cJSON_GetArraySize(parameters) > 0) {
+         cJSON* first = cJSON_GetArrayItem(parameters, 0);
+         cJSON* name = first ? cJSON_GetObjectItem(first, "name") : NULL;
+         cJSON* attributes = first ? cJSON_GetObjectItem(first, "attributes") : NULL;
+         if (cJSON_IsString(name) && cJSON_IsObject(attributes)) {
+            cJSON_AddStringToObject(root, "op", "SET_ATTRIBUTES");
+            cJSON_AddStringToObject(root, "param", name->valuestring);
+            cJSON_AddItemToObject(root, "attributes", cJSON_Duplicate(attributes, 1));
+         }
+      }
+   } else if (strcmp(command, "ADD_ROW") == 0) {
+      cJSON* table = cJSON_GetObjectItem(root, "table");
+      cJSON* row = cJSON_GetObjectItem(root, "row");
+      if (cJSON_IsString(table) && cJSON_IsArray(row)) {
+         cJSON_AddStringToObject(root, "op", "ADD_ROW");
+         cJSON_AddStringToObject(root, "tableName", table->valuestring);
+         cJSON_AddItemToObject(root, "rowData", cJSON_Duplicate(row, 1));
+      }
+   } else if (strcmp(command, "DELETE_ROW") == 0) {
+      cJSON* row = cJSON_GetObjectItem(root, "row");
+      if (cJSON_IsString(row)) {
+         cJSON_AddStringToObject(root, "op", "DELETE_ROW");
+         cJSON_AddStringToObject(root, "rowName", row->valuestring);
+      }
+   } else if (strcmp(command, "REPLACE_ROWS") == 0) {
+      cJSON* table = cJSON_GetObjectItem(root, "table");
+      cJSON* rows = cJSON_GetObjectItem(root, "rows");
+      if (cJSON_IsString(table) && cJSON_IsArray(rows)) {
+         cJSON_AddStringToObject(root, "op", "REPLACE_ROWS");
+         cJSON_AddStringToObject(root, "tableName", table->valuestring);
+         cJSON_AddItemToObject(root, "tableData", cJSON_Duplicate(rows, 1));
       }
    } else if (strcmp(command, "SUBSCRIBE") == 0 || strcmp(command, "UNSUBSCRIBE") == 0) {
       /* Not native in WebPA examples but map if encountered */
