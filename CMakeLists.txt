@@ -2,9 +2,26 @@ cmake_minimum_required(VERSION 3.10)
 
 project(parodus2rbus C)
 
-option(USE_LOCAL_LIBPARODUS "Build and link in-tree libparodus for debugging" ON)
+option(USE_LOCAL_LIBPARODUS "Build and link in-tree libparodus for debugging" OFF)
+option(WEBCONFIG_BIN_SUPPORT "Enable WebConfig binary/daemon support" OFF)
+option(WAN_FAILOVER_SUPPORTED "Enable WAN failover support" OFF)
+option(FEATURE_SUPPORT_MQTTCM "Enable MQTT Connection Manager support" OFF)
 
-set(TEST_ENVIRONMENT 1)
+# WebConfig feature definitions
+if(WEBCONFIG_BIN_SUPPORT)
+    add_definitions(-DWEBCONFIG_BIN_SUPPORT)
+    message(STATUS "WebConfig binary support enabled")
+endif()
+
+if(WAN_FAILOVER_SUPPORTED)
+    add_definitions(-DWAN_FAILOVER_SUPPORTED)
+    message(STATUS "WAN failover support enabled")
+endif()
+
+if(FEATURE_SUPPORT_MQTTCM)
+    add_definitions(-DFEATURE_SUPPORT_MQTTCM)
+    message(STATUS "MQTT Connection Manager support enabled")
+endif()
 
 if(USE_LOCAL_LIBPARODUS)
   message(STATUS "USE_LOCAL_LIBPARODUS=ON: building libparodus from source tree")
