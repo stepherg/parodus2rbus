@@ -1,0 +1,19 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export DEB_CFLAGS_MAINT_APPEND  = -Wall -pedantic
+export DEB_LDFLAGS_MAINT_APPEND = -Wl,--as-needed
+
+%:
+	dh $@ --buildsystem=cmake
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DWEBCONFIG_BIN_SUPPORT=ON \
+		-DWAN_FAILOVER_SUPPORTED=ON \
+		-DFEATURE_SUPPORT_MQTTCM=ON
+
+override_dh_auto_install:
+	dh_auto_install
+	# Remove any unwanted files here if needed

@@ -1,0 +1,207 @@
+name: Build Debian Packages
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  build-debian-packages:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+        dist: [ubuntu:24.04, ubuntu:22.04, ubuntu:20.04]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+      with:
+        platforms: linux/amd64,linux/arm64
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Prepare build environment
+      run: |
+        # Create build context directory
+        mkdir -p build-context
+        cp -r . build-context/
+        
+        # Generate version info
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/v}
+        else
+          VERSION="1.0.0-$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
+        fi
+        echo "PACKAGE_VERSION=$VERSION" >> $GITHUB_ENV
+        echo "VERSION=$VERSION" >> build-context/VERSION
+
+    - name: Create Dockerfile for build
+      run: |
+        cat > build-context/Dockerfile << 'EOF'
+        ARG BASE_IMAGE
+        FROM --platform=$TARGETPLATFORM $BASE_IMAGE
+        
+        ARG TARGETPLATFORM
+        ARG DEBIAN_FRONTEND=noninteractive
+        
+        # Install build dependencies
+        RUN apt-get update && apt-get install -y \
+            debhelper-compat \
+            cmake \
+            build-essential \
+            pkg-config \
+            devscripts \
+            dpkg-dev \
+            fakeroot \
+            git \
+            curl \
+            wget \
+            gnupg2 \
+            lsb-release \
+            software-properties-common \
+            && rm -rf /var/lib/apt/lists/*
+        
+        # Add RDK repository for RBus dependencies (if available)
+        # Note: You may need to adjust this based on your specific RBus package source
+        RUN echo "deb [trusted=yes] https://packages.rdkcentral.com/artifactory/rdk-generic-local/ ./" > /etc/apt/sources.list.d/rdk.list || true
+        
+        # Install RBus and other dependencies
+        # Note: These may need to be built from source or obtained from specific repositories
+        RUN apt-get update && apt-get install -y \
+            libcjson-dev \
+            libjansson-dev \
+            uuid-dev \
+            libssl-dev \
+            || echo "Some dependencies not available in standard repos - will need custom build"
+        
+        WORKDIR /build
+        COPY . .
+        
+        # Update changelog with current version
+        RUN if [ -f VERSION ]; then \
+              VERSION=$(cat VERSION); \
+              sed -i "1s/.*/parodus2rbus ($VERSION) unstable; urgency=medium/" debian/changelog; \
+            fi
+        
+        # Build the package
+        RUN dpkg-buildpackage -us -uc -b
+        
+        # Copy built packages to output directory
+        RUN mkdir -p /output && cp ../*.deb /output/ 2>/dev/null || echo "No .deb files found"
+        RUN mkdir -p /output && cp ../*.ddeb /output/ 2>/dev/null || echo "No .ddeb files found"
+        RUN ls -la /output/
+        EOF
+
+    - name: Build Debian package
+      run: |
+        DIST_NAME=$(echo "${{ matrix.dist }}" | cut -d: -f1)
+        DIST_VERSION=$(echo "${{ matrix.dist }}" | cut -d: -f2)
+        
+        docker buildx build \
+          --platform linux/${{ matrix.arch }} \
+          --build-arg BASE_IMAGE=${{ matrix.dist }} \
+          --output type=local,dest=./packages-${{ matrix.arch }}-${DIST_NAME}-${DIST_VERSION} \
+          build-context
+
+    - name: List built packages
+      run: |
+        DIST_NAME=$(echo "${{ matrix.dist }}" | cut -d: -f1)
+        DIST_VERSION=$(echo "${{ matrix.dist }}" | cut -d: -f2)
+        echo "Built packages for ${{ matrix.arch }}-${DIST_NAME}-${DIST_VERSION}:"
+        ls -la packages-${{ matrix.arch }}-${DIST_NAME}-${DIST_VERSION}/ || echo "No packages directory found"
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: debian-packages-${{ matrix.arch }}-${{ matrix.dist }}
+        path: packages-${{ matrix.arch }}-*/
+        retention-days: 30
+
+  create-release:
+    needs: build-debian-packages
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./all-packages
+
+    - name: Organize packages
+      run: |
+        mkdir -p release-packages
+        find ./all-packages -name "*.deb" -exec cp {} release-packages/ \;
+        find ./all-packages -name "*.ddeb" -exec cp {} release-packages/ \;
+        ls -la release-packages/
+
+    - name: Create Release
+      uses: actions/create-release@v1
+      id: create_release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        body: |
+          ## Debian Packages for parodus2rbus ${{ github.ref }}
+          
+          This release includes Debian packages built for:
+          - **Architectures**: amd64, arm64
+          - **Distributions**: Ubuntu 20.04, Ubuntu 22.04, Ubuntu 24.04
+          
+          ### Installation
+          
+          Download the appropriate `.deb` file for your architecture and distribution:
+          
+          ```bash
+          # For amd64 systems
+          wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/parodus2rbus_*_amd64.deb
+          sudo dpkg -i parodus2rbus_*_amd64.deb
+          
+          # For arm64 systems  
+          wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/parodus2rbus_*_arm64.deb
+          sudo dpkg -i parodus2rbus_*_arm64.deb
+          
+          # Install missing dependencies if needed
+          sudo apt-get install -f
+          ```
+          
+          ### Usage
+          
+          After installation, run:
+          ```bash
+          parodus2rbus --help
+          ```
+        draft: false
+        prerelease: false
+
+    - name: Upload Release Assets
+      run: |
+        for file in release-packages/*.deb; do
+          if [ -f "$file" ]; then
+            echo "Uploading $file"
+            curl -X POST \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$file" \
+              "${{ steps.create_release.outputs.upload_url }}=$(basename "$file")"
+          fi
+        done

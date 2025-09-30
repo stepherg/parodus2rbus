@@ -1,0 +1,9 @@
+parodus2rbus (1.0.0-1) unstable; urgency=medium
+
+  * Initial release
+  * Lightweight bridge for Parodus-style JSON to RBUS operations
+  * Support for WebConfig binary/daemon support
+  * Support for WAN failover
+  * Support for MQTT Connection Manager
+
+ -- RDK Engineering <rdk-engineering@comcast.com>  Mon, 30 Sep 2024 10:00:00 +0000

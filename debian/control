@@ -1,0 +1,35 @@
+Source: parodus2rbus
+Section: net
+Priority: optional
+Maintainer: RDK Engineering <rdk-engineering@comcast.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ cmake (>= 3.10),
+ build-essential,
+ pkg-config,
+ librbus-dev,
+ librbuscore-dev,
+ libcjson-dev,
+ libjansson-dev,
+ libcimplog-dev,
+ libwrp-c-dev,
+ libparodus-dev,
+ uuid-dev,
+ libssl-dev
+Standards-Version: 4.6.0
+Homepage: https://github.com/stepherg/parodus2rbus
+Vcs-Git: https://github.com/stepherg/parodus2rbus.git
+Vcs-Browser: https://github.com/stepherg/parodus2rbus
+
+Package: parodus2rbus
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Lightweight bridge translating Parodus-style JSON requests to RBUS
+ parodus2rbus is a lightweight bridge that translates simple Parodus-style
+ JSON requests into RBUS get/set operations. It supports Parodus transport
+ via libparodus and handles WRP message types including REQ, RETRIEVE (CRUD
+ read), and EVENT operations.
+ .
+ The application acts as a bridge between the Parodus WebPA protocol and
+ the RBus messaging system, enabling communication between web-based
+ configuration interfaces and device management systems.
