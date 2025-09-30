@@ -1,6 +1,8 @@
 #include "protocol.h"
 #include "rbus_adapter.h"
 #include "notification.h"
+#include "webconfig.h"
+#include "performance.h"
 #include "log.h"
 #include <string.h>
 #include <stdlib.h>
@@ -85,6 +87,7 @@ operation_type_t parse_operation_type(const char* op_string) {
    if (strcmp(op_string, "SUBSCRIBE") == 0) return OP_SUBSCRIBE;
    if (strcmp(op_string, "UNSUBSCRIBE") == 0) return OP_UNSUBSCRIBE;
    if (strcmp(op_string, "TEST_AND_SET") == 0) return OP_TEST_AND_SET;
+   if (strcmp(op_string, "WEBCONFIG_TRANSACTION") == 0) return OP_WEBCONFIG_TRANSACTION;
    return OP_UNKNOWN;
 }
 
@@ -152,17 +155,34 @@ cJSON* protocol_build_attributes_response(const char* id, int status, cJSON* att
 
 cJSON* protocol_handle_request(cJSON* root) {
    if (!root || !cJSON_IsObject(root)) return protocol_build_set_response(NULL, 400, "invalid json");
+   
+   perf_timer_t* timer = perf_timer_start("protocol_request", PERF_CAT_PROTOCOL);
+   
    cJSON* id = cJSON_GetObjectItem(root, "id");
    cJSON* op = cJSON_GetObjectItem(root, "op");
-   if (!cJSON_IsString(op)) return protocol_build_set_response(id ? id->valuestring : NULL, 400, "missing op");
+   if (!cJSON_IsString(op)) {
+      if (timer) {
+         double latency = perf_timer_elapsed_ms(timer);
+         perf_timer_stop(timer);
+         perf_hook_protocol_request("invalid", latency, 0);
+      }
+      return protocol_build_set_response(id ? id->valuestring : NULL, 400, "missing op");
+   }
    
    operation_type_t op_type = parse_operation_type(op->valuestring);
    const char* id_str = id ? id->valuestring : NULL;
    
+   cJSON* response = NULL;
+   int success = 1;
+   
    switch (op_type) {
       case OP_GET: {
          cJSON* params = cJSON_GetObjectItem(root, "params");
-         if (!cJSON_IsArray(params)) return protocol_build_set_response(id_str, 400, "params array required");
+         if (!cJSON_IsArray(params)) {
+            response = protocol_build_set_response(id_str, 400, "params array required");
+            success = 0;
+            break;
+         }
          cJSON* results = cJSON_CreateObject();
          cJSON* entry = NULL; int failures = 0; int idx = 0;
          cJSON_ArrayForEach(entry, params) {
@@ -215,7 +235,9 @@ cJSON* protocol_handle_request(cJSON* root) {
             idx++;
          }
          int status = failures ? 207 /* multi-status */ : 200;
-         return protocol_build_get_response(id_str, status, results);
+         response = protocol_build_get_response(id_str, status, results);
+         success = (failures == 0);
+         break;
       }
       
       case OP_SET: {
@@ -406,7 +428,59 @@ cJSON* protocol_handle_request(cJSON* root) {
          }
       }
       
+      case OP_WEBCONFIG_TRANSACTION: {
+         cJSON* transaction_data = cJSON_GetObjectItem(root, "transaction");
+         if (!cJSON_IsObject(transaction_data)) {
+            return protocol_build_set_response(id_str, 400, "transaction object required");
+         }
+         
+         /* Parse transaction from JSON */
+         webconfig_transaction_t* transaction = webconfig_transaction_from_json(cJSON_Print(transaction_data));
+         if (!transaction) {
+            return protocol_build_set_response(id_str, 400, "invalid transaction format");
+         }
+         
+         /* Execute WebConfig transaction */
+         webconfig_result_t* result = NULL;
+         int rc = webconfig_execute_transaction(transaction, &result);
+         
+         cJSON* response_obj = NULL;
+         if (rc == 0 && result) {
+            /* Convert result to JSON response */
+            char* result_json = webconfig_result_to_json(result);
+            if (result_json) {
+               response_obj = cJSON_Parse(result_json);
+               free(result_json);
+            }
+            
+            webconfig_free_result(result);
+         }
+         
+         webconfig_free_transaction(transaction);
+         
+         if (response_obj) {
+            cJSON* response = cJSON_CreateObject();
+            if (id_str) cJSON_AddStringToObject(response, "id", id_str);
+            cJSON_AddNumberToObject(response, "status", 200);
+            cJSON_AddItemToObject(response, "result", response_obj);
+            return response;
+         } else {
+            return protocol_build_set_response(id_str, map_status(rc), "WebConfig transaction failed");
+         }
+      }
+      
       default:
-         return protocol_build_set_response(id_str, 400, "unsupported op");
+         response = protocol_build_set_response(id_str, 400, "unsupported op");
+         success = 0;
+         break;
    }
+   
+   /* Performance monitoring */
+   if (timer) {
+      double latency = perf_timer_elapsed_ms(timer);
+      perf_timer_stop(timer);
+      perf_hook_protocol_request(op->valuestring, latency, success);
+   }
+   
+   return response ? response : protocol_build_set_response(id_str, 500, "internal error");
 }

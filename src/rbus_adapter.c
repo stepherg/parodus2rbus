@@ -1,5 +1,6 @@
 #include "rbus_adapter.h"
 #include "cache.h"
+#include "performance.h"
 #include "log.h"
 #include <rbus.h>
 #include <stdlib.h>
@@ -49,22 +50,46 @@ void rbus_adapter_close(void) {
 int rbus_adapter_get(const char* param, char** outValue) {
    if (!g_handle || !param || !outValue) return -1;
    
+   perf_timer_t* timer = perf_timer_start("rbus_get", PERF_CAT_RBUS);
+   
    /* Try cache first */
    char* cached_value = NULL;
    if (cache_get_parameter(param, &cached_value, NULL) == 0) {
       *outValue = cached_value;
       LOGD("Cache hit for parameter: %s", param);
+      
+      if (timer) {
+         double latency = perf_timer_elapsed_ms(timer);
+         perf_timer_stop(timer);
+         perf_hook_cache_operation("get", 1, latency);
+      }
       return 0;
    }
    
    rbusValue_t value = NULL;
    rbusError_t rc = rbus_get(g_handle, param, &value);
+   
+   double latency = timer ? perf_timer_elapsed_ms(timer) : 0.0;
+   int success = (rc == RBUS_ERROR_SUCCESS);
+   
    if (rc != RBUS_ERROR_SUCCESS) {
       LOGW("rbus_get(%s) failed: %d", param, rc);
+      if (timer) {
+         perf_timer_stop(timer);
+         perf_hook_rbus_operation("get", param, latency, 0);
+         perf_hook_cache_operation("get", 0, latency);
+      }
       return -2;
    }
    char* str = rbusValue_ToString(value, NULL, 0);
-   if (!str) { rbusValue_Release(value); return -3; }
+   if (!str) { 
+      rbusValue_Release(value); 
+      if (timer) {
+         perf_timer_stop(timer);
+         perf_hook_rbus_operation("get", param, latency, 0);
+      }
+      return -3; 
+   }
    *outValue = strdup(str);
    
    /* Cache the result */
@@ -72,6 +97,13 @@ int rbus_adapter_get(const char* param, char** outValue) {
    
    free(str);
    rbusValue_Release(value);
+   
+   if (timer) {
+      perf_timer_stop(timer);
+      perf_hook_rbus_operation("get", param, latency, 1);
+      perf_hook_cache_operation("get", 0, latency);
+   }
+   
    return 0;
 }
 
@@ -140,18 +172,34 @@ int rbus_adapter_get_typed(const char* param, char** outValue, int* outType) {
 
 int rbus_adapter_set(const char* param, const char* value) {
    if (!g_handle || !param || !value) return -1;
+   
+   perf_timer_t* timer = perf_timer_start("rbus_set", PERF_CAT_RBUS);
+   
    rbusValue_t val = NULL;
    rbusValue_Init(&val);
    rbusValue_SetString(val, value); /* Initial version: treat all as strings */
    rbusError_t rc = rbus_set(g_handle, param, val, NULL);
    rbusValue_Release(val);
+   
+   double latency = timer ? perf_timer_elapsed_ms(timer) : 0.0;
+   int success = (rc == RBUS_ERROR_SUCCESS);
+   
    if (rc != RBUS_ERROR_SUCCESS) {
       LOGW("rbus_set(%s) failed: %d", param, rc);
+      if (timer) {
+         perf_timer_stop(timer);
+         perf_hook_rbus_operation("set", param, latency, 0);
+      }
       return -2;
    }
    
    /* Invalidate cache for this parameter on successful set */
    cache_invalidate_parameter(param);
+   
+   if (timer) {
+      perf_timer_stop(timer);
+      perf_hook_rbus_operation("set", param, latency, 1);
+   }
    
    return 0;
 }

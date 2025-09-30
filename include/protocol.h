@@ -15,7 +15,8 @@ typedef enum {
     OP_REPLACE_ROWS,
     OP_SUBSCRIBE,
     OP_UNSUBSCRIBE,
-    OP_TEST_AND_SET
+    OP_TEST_AND_SET,
+    OP_WEBCONFIG_TRANSACTION
 } operation_type_t;
 
 /* Table data structure for row operations */
