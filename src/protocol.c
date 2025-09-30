@@ -3,6 +3,7 @@
 #include "notification.h"
 #include "webconfig.h"
 #include "performance.h"
+#include "auth.h"
 #include "log.h"
 #include <string.h>
 #include <stdlib.h>
@@ -169,6 +170,40 @@ cJSON* protocol_handle_request(cJSON* root) {
       return protocol_build_set_response(id ? id->valuestring : NULL, 400, "missing op");
    }
    
+   /* Extract authentication context */
+   auth_context_t* auth_context = NULL;
+   cJSON* auth_header = cJSON_GetObjectItem(root, "authorization");
+   cJSON* session_header = cJSON_GetObjectItem(root, "session_id");
+   cJSON* client_ip = cJSON_GetObjectItem(root, "client_ip");
+   cJSON* user_agent = cJSON_GetObjectItem(root, "user_agent");
+   
+   const char* client_ip_str = cJSON_IsString(client_ip) ? client_ip->valuestring : "unknown";
+   const char* user_agent_str = cJSON_IsString(user_agent) ? user_agent->valuestring : "unknown";
+   
+   if (cJSON_IsString(auth_header)) {
+      /* Try different token types */
+      const char* auth_str = auth_header->valuestring;
+      
+      if (strncmp(auth_str, "Bearer ", 7) == 0) {
+         auth_context = auth_authenticate_request(auth_str + 7, AUTH_TOKEN_BEARER, client_ip_str, user_agent_str);
+      } else if (strncmp(auth_str, "JWT ", 4) == 0) {
+         auth_context = auth_authenticate_request(auth_str + 4, AUTH_TOKEN_JWT, client_ip_str, user_agent_str);
+      } else if (strncmp(auth_str, "ApiKey ", 7) == 0) {
+         auth_context = auth_authenticate_request(auth_str + 7, AUTH_TOKEN_API_KEY, client_ip_str, user_agent_str);
+      } else {
+         /* Try as bearer token without prefix */
+         auth_context = auth_authenticate_request(auth_str, AUTH_TOKEN_BEARER, client_ip_str, user_agent_str);
+      }
+   } else if (cJSON_IsString(session_header)) {
+      /* Session-based authentication */
+      auth_context = auth_authenticate_session(session_header->valuestring, client_ip_str);
+   }
+   
+   /* If no authentication provided, create anonymous context for validation */
+   if (!auth_context) {
+      auth_context = auth_authenticate_request(NULL, AUTH_TOKEN_BEARER, client_ip_str, user_agent_str);
+   }
+   
    operation_type_t op_type = parse_operation_type(op->valuestring);
    const char* id_str = id ? id->valuestring : NULL;
    
@@ -188,6 +223,16 @@ cJSON* protocol_handle_request(cJSON* root) {
          cJSON_ArrayForEach(entry, params) {
             if (cJSON_IsString(entry)) {
                const char* p = entry->valuestring;
+               
+               /* Check authorization for this parameter */
+               if (!auth_check_acl(p, auth_context)) {
+                  failures++;
+                  auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", p, "GET");
+                  cJSON_AddNullToObject(results, p);
+                  idx++;
+                  continue;
+               }
+               
                size_t plen = strlen(p);
                if(plen>0 && p[plen-1]=='.') {
                   /* wildcard expansion */
@@ -245,6 +290,20 @@ cJSON* protocol_handle_request(cJSON* root) {
          cJSON* value = cJSON_GetObjectItem(root, "value");
          if (!cJSON_IsString(param) || !cJSON_IsString(value)) 
             return protocol_build_set_response(id_str, 400, "param+value required");
+         
+         /* Check authorization for this parameter */
+         if (!auth_check_acl(param->valuestring, auth_context)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      param->valuestring, "SET");
+            return protocol_build_set_response(id_str, 403, "access denied");
+         }
+         
+         /* Check write permission */
+         if (!auth_check_permission(auth_context, param->valuestring, AUTH_PERM_WRITE)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      param->valuestring, "SET");
+            return protocol_build_set_response(id_str, 403, "write permission required");
+         }
             
          /* Get old value for notification */
          char* oldValue = NULL;
@@ -267,6 +326,14 @@ cJSON* protocol_handle_request(cJSON* root) {
          cJSON* param = cJSON_GetObjectItem(root, "param");
          if (!cJSON_IsString(param)) 
             return protocol_build_set_response(id_str, 400, "param required");
+         
+         /* Check authorization for this parameter */
+         if (!auth_check_acl(param->valuestring, auth_context)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      param->valuestring, "GET_ATTRIBUTES");
+            return protocol_build_set_response(id_str, 403, "access denied");
+         }
+         
          param_attribute_t attr = {0};
          int rc = rbus_adapter_get_attributes(param->valuestring, &attr);
          if (rc == 0) {
@@ -286,6 +353,20 @@ cJSON* protocol_handle_request(cJSON* root) {
          if (!cJSON_IsString(param) || !cJSON_IsObject(attrs)) 
             return protocol_build_set_response(id_str, 400, "param+attributes required");
          
+         /* Check authorization for this parameter */
+         if (!auth_check_acl(param->valuestring, auth_context)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      param->valuestring, "SET_ATTRIBUTES");
+            return protocol_build_set_response(id_str, 403, "access denied");
+         }
+         
+         /* Check admin permission for attribute modifications */
+         if (!auth_check_permission(auth_context, param->valuestring, AUTH_PERM_ADMIN)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      param->valuestring, "SET_ATTRIBUTES");
+            return protocol_build_set_response(id_str, 403, "admin permission required");
+         }
+         
          param_attribute_t attr = {0};
          attr.name = strdup(param->valuestring);
          cJSON* notify = cJSON_GetObjectItem(attrs, "notify");
@@ -303,6 +384,20 @@ cJSON* protocol_handle_request(cJSON* root) {
          cJSON* rowData = cJSON_GetObjectItem(root, "rowData");
          if (!cJSON_IsString(tableName) || !cJSON_IsArray(rowData)) 
             return protocol_build_set_response(id_str, 400, "tableName+rowData required");
+         
+         /* Check authorization for this table */
+         if (!auth_check_acl(tableName->valuestring, auth_context)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      tableName->valuestring, "ADD_ROW");
+            return protocol_build_set_response(id_str, 403, "access denied");
+         }
+         
+         /* Check write permission for adding rows */
+         if (!auth_check_permission(auth_context, tableName->valuestring, AUTH_PERM_WRITE)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      tableName->valuestring, "ADD_ROW");
+            return protocol_build_set_response(id_str, 403, "write permission required");
+         }
          
          table_row_t row = {0};
          row.paramCount = cJSON_GetArraySize(rowData);
@@ -337,6 +432,21 @@ cJSON* protocol_handle_request(cJSON* root) {
          cJSON* rowName = cJSON_GetObjectItem(root, "rowName");
          if (!cJSON_IsString(rowName)) 
             return protocol_build_set_response(id_str, 400, "rowName required");
+         
+         /* Check authorization for this row */
+         if (!auth_check_acl(rowName->valuestring, auth_context)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      rowName->valuestring, "DELETE_ROW");
+            return protocol_build_set_response(id_str, 403, "access denied");
+         }
+         
+         /* Check write permission for deletion */
+         if (!auth_check_permission(auth_context, rowName->valuestring, AUTH_PERM_WRITE)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      rowName->valuestring, "DELETE_ROW");
+            return protocol_build_set_response(id_str, 403, "write permission required");
+         }
+         
          int rc = rbus_adapter_delete_table_row(rowName->valuestring);
          return protocol_build_set_response(id_str, map_status(rc), rc == 0 ? "OK" : "delete row failed");
       }
@@ -346,6 +456,20 @@ cJSON* protocol_handle_request(cJSON* root) {
          cJSON* tableData = cJSON_GetObjectItem(root, "tableData");
          if (!cJSON_IsString(tableName) || !cJSON_IsArray(tableData)) 
             return protocol_build_set_response(id_str, 400, "tableName+tableData required");
+         
+         /* Check authorization for this table */
+         if (!auth_check_acl(tableName->valuestring, auth_context)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      tableName->valuestring, "REPLACE_ROWS");
+            return protocol_build_set_response(id_str, 403, "access denied");
+         }
+         
+         /* Check write permission for table operations */
+         if (!auth_check_permission(auth_context, tableName->valuestring, AUTH_PERM_WRITE)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      tableName->valuestring, "REPLACE_ROWS");
+            return protocol_build_set_response(id_str, 403, "write permission required");
+         }
          
          int rowCount = cJSON_GetArraySize(tableData);
          table_row_t* rows = calloc(rowCount, sizeof(table_row_t));
@@ -383,6 +507,14 @@ cJSON* protocol_handle_request(cJSON* root) {
       case OP_SUBSCRIBE: {
          cJSON* event = cJSON_GetObjectItem(root, "event");
          if (!cJSON_IsString(event)) return protocol_build_set_response(id_str, 400, "event required");
+         
+         /* Check authorization for this event */
+         if (!auth_check_acl(event->valuestring, auth_context)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      event->valuestring, "SUBSCRIBE");
+            return protocol_build_set_response(id_str, 403, "access denied");
+         }
+         
          int rc = rbus_adapter_subscribe(event->valuestring);
          return protocol_build_set_response(id_str, rc == 0 ? 200 : 500, rc == 0 ? "subscribed" : "subscribe failed");
       }
@@ -390,6 +522,14 @@ cJSON* protocol_handle_request(cJSON* root) {
       case OP_UNSUBSCRIBE: {
          cJSON* event = cJSON_GetObjectItem(root, "event");
          if (!cJSON_IsString(event)) return protocol_build_set_response(id_str, 400, "event required");
+         
+         /* Check authorization for this event */
+         if (!auth_check_acl(event->valuestring, auth_context)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      event->valuestring, "UNSUBSCRIBE");
+            return protocol_build_set_response(id_str, 403, "access denied");
+         }
+         
          int rc = rbus_adapter_unsubscribe(event->valuestring);
          return protocol_build_set_response(id_str, rc == 0 ? 200 : 500, rc == 0 ? "unsubscribed" : "unsubscribe failed");
       }
@@ -402,6 +542,20 @@ cJSON* protocol_handle_request(cJSON* root) {
          
          if (!cJSON_IsString(param) || !cJSON_IsString(oldValue) || !cJSON_IsString(newValue)) {
             return protocol_build_set_response(id_str, 400, "param, oldValue, and newValue required");
+         }
+         
+         /* Check authorization for this parameter */
+         if (!auth_check_acl(param->valuestring, auth_context)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      param->valuestring, "TEST_AND_SET");
+            return protocol_build_set_response(id_str, 403, "access denied");
+         }
+         
+         /* Check write permission for test-and-set operations */
+         if (!auth_check_permission(auth_context, param->valuestring, AUTH_PERM_WRITE)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      param->valuestring, "TEST_AND_SET");
+            return protocol_build_set_response(id_str, 403, "write permission required");
          }
          
          test_and_set_t tas = {0};
@@ -432,6 +586,13 @@ cJSON* protocol_handle_request(cJSON* root) {
          cJSON* transaction_data = cJSON_GetObjectItem(root, "transaction");
          if (!cJSON_IsObject(transaction_data)) {
             return protocol_build_set_response(id_str, 400, "transaction object required");
+         }
+         
+         /* Check admin permission for WebConfig transactions */
+         if (!auth_check_permission(auth_context, "webconfig", AUTH_PERM_ADMIN)) {
+            auth_log_permission_denied(auth_context ? auth_context->user_id : "anonymous", 
+                                      "webconfig", "WEBCONFIG_TRANSACTION");
+            return protocol_build_set_response(id_str, 403, "admin permission required for WebConfig transactions");
          }
          
          /* Parse transaction from JSON */

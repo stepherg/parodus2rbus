@@ -4,6 +4,7 @@
 #include "cache.h"
 #include "webconfig.h"
 #include "performance.h"
+#include "auth_init.h"
 #include "log.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,8 +63,17 @@ int main(int argc, char** argv){
              webconfig_config.max_transaction_size, webconfig_config.transaction_timeout);
     }
     
+    /* Initialize authentication system */
+    const char* auth_config_file = "/root/projects/rbus-elements/parodus2rbus/config/auth_config.json";
+    if (auth_system_init(auth_config_file) != 0) {
+        LOGW("Failed to initialize authentication system: %s", "continuing without authentication");
+    } else {
+        LOGI("Authentication system initialized with config: %s", auth_config_file);
+    }
+    
     if(rbus_adapter_open(g_p2r_config.rbus_component)!=0){
         LOGE0("Failed to open RBUS");
+        auth_system_cleanup();
         webconfig_cleanup();
         cache_cleanup();
         perf_cleanup();
@@ -75,6 +85,7 @@ int main(int argc, char** argv){
     
     /* Cleanup all systems */
     rbus_adapter_close();
+    auth_system_cleanup();
     webconfig_cleanup();
     cache_cleanup();
     

@@ -55,6 +55,12 @@ if(NOT UUID_LIBRARY)
   message(FATAL_ERROR "uuid library not found (required by webconfig)")
 endif()
 
+# OpenSSL (needed by auth)
+find_package(OpenSSL REQUIRED)
+if(NOT OPENSSL_FOUND)
+  message(FATAL_ERROR "OpenSSL not found (required by auth)")
+endif()
+
 foreach(var RBUS_LIBRARY RBUS_CORE_LIBRARY RBUS_INCLUDE_DIR RTMSG_INCLUDE_DIR CJSON_LIBRARY CJSON_INCLUDE_DIR JANSSON_LIBRARY JANSSON_INCLUDE_DIR)
   if(NOT ${var})
     message(FATAL_ERROR "Missing dependency variable: ${var}. Ensure dependencies are installed or build from project root.")
@@ -90,6 +96,8 @@ add_library(parodus2rbus_objs OBJECT
   src/cache.c
   src/webconfig.c
   src/performance.c
+  src/auth.c
+  src/auth_init.c
 )
 
 target_include_directories(parodus2rbus_objs PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -97,7 +105,7 @@ target_include_directories(parodus2rbus_objs PRIVATE ${RBUS_INCLUDE_DIR} ${RTMSG
 
 add_executable(parodus2rbus $<TARGET_OBJECTS:parodus2rbus_objs> src/main.c)
 
-target_link_libraries(parodus2rbus PRIVATE ${RBUS_LIBRARY} ${RBUS_CORE_LIBRARY} ${CJSON_LIBRARY} ${JANSSON_LIBRARY} ${CIMPLOG_LIBRARY} ${WRP_C_LIBRARY} ${UUID_LIBRARY})
+target_link_libraries(parodus2rbus PRIVATE ${RBUS_LIBRARY} ${RBUS_CORE_LIBRARY} ${CJSON_LIBRARY} ${JANSSON_LIBRARY} ${CIMPLOG_LIBRARY} ${WRP_C_LIBRARY} ${UUID_LIBRARY} ${OPENSSL_LIBRARIES})
 target_link_options(parodus2rbus PRIVATE -Wl,--no-as-needed)
 if(LIBPARODUS_LIBRARY AND LIBPARODUS_INCLUDE_DIR)
   target_link_libraries(parodus2rbus PRIVATE ${LIBPARODUS_LIBRARY})

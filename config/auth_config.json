@@ -1,0 +1,121 @@
+{
+  "authentication": {
+    "enabled": true,
+    "session_timeout": 3600,
+    "max_failed_attempts": 5,
+    "lockout_duration": 300,
+    "jwt_secret": "your-jwt-secret-key-please-change-this",
+    "password_policy": {
+      "min_length": 8,
+      "require_uppercase": true,
+      "require_lowercase": true,
+      "require_numbers": true,
+      "require_special": false
+    }
+  },
+  "users": [
+    {
+      "user_id": "admin",
+      "password_hash": "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",
+      "salt": "admin_salt_123",
+      "role": "admin",
+      "enabled": true,
+      "created_time": 1640995200,
+      "last_login": 0,
+      "failed_attempts": 0,
+      "locked_until": 0
+    },
+    {
+      "user_id": "operator",
+      "password_hash": "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f",
+      "salt": "operator_salt_456",
+      "role": "operator",
+      "enabled": true,
+      "created_time": 1640995200,
+      "last_login": 0,
+      "failed_attempts": 0,
+      "locked_until": 0
+    },
+    {
+      "user_id": "user",
+      "password_hash": "04f8996da763b7a969b1028ee3007569eaf3a635486ddab211d512c85b9df8fb",
+      "salt": "user_salt_789",
+      "role": "user",
+      "enabled": true,
+      "created_time": 1640995200,
+      "last_login": 0,
+      "failed_attempts": 0,
+      "locked_until": 0
+    }
+  ],
+  "acl_rules": [
+    {
+      "pattern": "Device.*",
+      "roles": ["admin", "operator", "user"],
+      "permissions": ["read", "write"],
+      "description": "Device configuration parameters"
+    },
+    {
+      "pattern": "Device.DeviceInfo.*",
+      "roles": ["admin", "operator", "user"],
+      "permissions": ["read"],
+      "description": "Device information (read-only)"
+    },
+    {
+      "pattern": "Device.WiFi.*",
+      "roles": ["admin", "operator"],
+      "permissions": ["read", "write"],
+      "description": "WiFi configuration"
+    },
+    {
+      "pattern": "Device.Ethernet.*",
+      "roles": ["admin", "operator"],
+      "permissions": ["read", "write"],
+      "description": "Ethernet configuration"
+    },
+    {
+      "pattern": "Device.DHCPv4.*",
+      "roles": ["admin"],
+      "permissions": ["read", "write"],
+      "description": "DHCP configuration (admin only)"
+    },
+    {
+      "pattern": "Device.Firewall.*",
+      "roles": ["admin"],
+      "permissions": ["read", "write"],
+      "description": "Firewall configuration (admin only)"
+    },
+    {
+      "pattern": "Device.Time.*",
+      "roles": ["admin", "operator"],
+      "permissions": ["read", "write"],
+      "description": "Time and NTP configuration"
+    },
+    {
+      "pattern": "Device.UserInterface.*",
+      "roles": ["admin", "operator", "user"],
+      "permissions": ["read"],
+      "description": "User interface settings"
+    },
+    {
+      "pattern": "Device.ManagementServer.*",
+      "roles": ["admin"],
+      "permissions": ["read", "write"],
+      "description": "Management server configuration (admin only)"
+    },
+    {
+      "pattern": "webconfig",
+      "roles": ["admin"],
+      "permissions": ["admin"],
+      "description": "WebConfig transactions (admin only)"
+    },
+    {
+      "pattern": "*",
+      "roles": ["guest"],
+      "permissions": ["read"],
+      "description": "Default guest access (read-only)"
+    }
+  ],
+  "sessions": [],
+  "tokens": []
+}
