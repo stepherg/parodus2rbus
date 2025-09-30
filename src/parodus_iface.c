@@ -3,6 +3,7 @@
 #include "config.h"
 #include "log.h"
 #include "rbus_adapter.h"
+#include "notification.h"
 #include <cJSON.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -15,6 +16,35 @@
 
 /* run flag must appear before any function using it (event thread) */
 static volatile sig_atomic_t g_run = 1;
+
+/* Global libparodus instance for notification delivery */
+static libpd_instance_t g_parodus_instance = NULL;
+
+/* Notification emission hook used by notification system */
+void p2r_emit_notification(const char* dest, const char* payload_json) {
+   if (!dest || !payload_json || !g_parodus_instance) return;
+   
+   LOGI("Emitting notification to %s: %s", dest, payload_json);
+   
+   /* Build WRP message for notification */
+   wrp_msg_t* notif_msg = (wrp_msg_t*)malloc(sizeof(wrp_msg_t));
+   if (!notif_msg) return;
+   
+   memset(notif_msg, 0, sizeof(wrp_msg_t));
+   notif_msg->msg_type = WRP_MSG_TYPE__EVENT;
+   notif_msg->u.event.source = strdup(g_p2r_config.service_name ? g_p2r_config.service_name : "parodus2rbus");
+   notif_msg->u.event.dest = strdup(dest);
+   notif_msg->u.event.content_type = strdup("application/json");
+   notif_msg->u.event.payload = (void*)strdup(payload_json);
+   notif_msg->u.event.payload_size = strlen(payload_json);
+   
+   int rc = libparodus_send(g_parodus_instance, notif_msg);
+   if (rc != 0) {
+      LOGW("Failed to send notification: %d", rc);
+   }
+   
+   wrp_free_struct(notif_msg);
+}
 
 /* Event emission hook used by rbus_adapter when RBUS delivers an event */
 void p2r_emit_event(const char* name, const char* payload_json) {
@@ -205,19 +235,44 @@ static char* convert_internal_to_webpa_ext(const char* inJson, cJSON* originalRe
       if (wildcardMode) {
          /* Build a single grouped parameter */
          cJSON* grouped = cJSON_CreateObject();
-         /* Use first wildcard passed in request as name */
-         const char* wildcardName = NULL;
+         /* Collect all wildcard parameters and concatenate them */
+         char* wildcardName = NULL;
          if (originalRequest) {
             cJSON* paramsReq = cJSON_GetObjectItem(originalRequest, "params");
             if (paramsReq && cJSON_IsArray(paramsReq)) {
+               size_t totalLen = 0;
+               int wildcardCount = 0;
+               /* First pass: calculate total length needed */
                cJSON* e = NULL; cJSON_ArrayForEach(e, paramsReq) {
                   if (cJSON_IsString(e)) {
-                     const char* s = e->valuestring; size_t l = strlen(s); if (l > 0 && s[l - 1] == '.') { wildcardName = s; break; }
+                     const char* s = e->valuestring; size_t l = strlen(s); 
+                     if (l > 0 && s[l - 1] == '.') { 
+                        totalLen += l + 1; /* +1 for comma */
+                        wildcardCount++;
+                     }
+                  }
+               }
+               /* Second pass: build concatenated string */
+               if (wildcardCount > 0) {
+                  wildcardName = (char*)malloc(totalLen + 1);
+                  if (wildcardName) {
+                     wildcardName[0] = '\0';
+                     int first = 1;
+                     cJSON_ArrayForEach(e, paramsReq) {
+                        if (cJSON_IsString(e)) {
+                           const char* s = e->valuestring; size_t l = strlen(s);
+                           if (l > 0 && s[l - 1] == '.') {
+                              if (!first) strcat(wildcardName, ",");
+                              strcat(wildcardName, s);
+                              first = 0;
+                           }
+                        }
+                     }
                   }
                }
             }
          }
-         if (!wildcardName) wildcardName = "wildcard";
+         if (!wildcardName) wildcardName = strdup("wildcard");
          cJSON_AddStringToObject(grouped, "name", wildcardName);
          LOGI("wildcardName: %s", wildcardName);
 
@@ -254,6 +309,7 @@ static char* convert_internal_to_webpa_ext(const char* inJson, cJSON* originalRe
          /* Place grouped dataType after count & message for visibility */
          cJSON_AddNumberToObject(grouped, "dataType", 11);
          cJSON_AddItemToArray(arr, grouped);
+         if (wildcardName) free(wildcardName);
       } else {
          cJSON* child = results->child;
          while (child) {
@@ -317,6 +373,33 @@ int parodus_iface_run(void) {
          return 1;
       }
       LOGI("libparodus connected: service=%s parodus_url=%s client_url=%s", service_name, parodus_url, client_url);
+      
+      /* Store global parodus instance for notifications */
+      g_parodus_instance = inst;
+      
+      /* Initialize notification system */
+      if (notification_init(service_name) == 0) {
+         LOGI("Notification system initialized: %s", "ready");
+         
+         /* Configure notification system */
+         notification_config_t config = {0};
+         config.device_id = strdup(service_name);
+         config.fw_version = strdup("1.0.0");
+         config.enable_param_notifications = 1;
+         config.enable_client_notifications = 1;
+         config.enable_device_notifications = 1;
+         config.notification_retry_count = 3;
+         config.notification_timeout_ms = 30000;
+         notification_configure(&config);
+         free(config.device_id);
+         free(config.fw_version);
+         
+         /* Subscribe to RBUS events for automatic notifications */
+         notification_subscribe_rbus_events();
+      } else {
+         LOGW("Failed to initialize notification system: %s", "continuing without notifications");
+      }
+      
       while (g_run) {
          wrp_msg_t* msg = NULL;
          int rcv = libparodus_receive(inst, &msg, 2000);
@@ -416,6 +499,11 @@ int parodus_iface_run(void) {
          }
          wrp_free_struct(msg); /* proper free for libparodus-allocated message */
       }
+      
+      /* Cleanup notification system */
+      notification_cleanup();
+      g_parodus_instance = NULL;
+      
       libparodus_shutdown(&inst);
       LOGI0("Parodus mode exiting");
       return 0;

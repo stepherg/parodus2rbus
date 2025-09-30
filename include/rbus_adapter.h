@@ -32,4 +32,7 @@ int rbus_adapter_set_attributes(const char* param, const param_attribute_t* attr
 int rbus_adapter_subscribe(const char* eventName);
 int rbus_adapter_unsubscribe(const char* eventName);
 
+/* Atomic TEST_AND_SET operation */
+int rbus_adapter_test_and_set(const test_and_set_t* tas);
+
 #endif

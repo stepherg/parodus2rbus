@@ -1,5 +1,6 @@
 #include "protocol.h"
 #include "rbus_adapter.h"
+#include "notification.h"
 #include "log.h"
 #include <string.h>
 #include <stdlib.h>
@@ -83,6 +84,7 @@ operation_type_t parse_operation_type(const char* op_string) {
    if (strcmp(op_string, "REPLACE_ROWS") == 0) return OP_REPLACE_ROWS;
    if (strcmp(op_string, "SUBSCRIBE") == 0) return OP_SUBSCRIBE;
    if (strcmp(op_string, "UNSUBSCRIBE") == 0) return OP_UNSUBSCRIBE;
+   if (strcmp(op_string, "TEST_AND_SET") == 0) return OP_TEST_AND_SET;
    return OP_UNKNOWN;
 }
 
@@ -97,6 +99,15 @@ void free_table_row(table_row_t* row) {
       free(row->params);
    }
    free(row);
+}
+
+/* Free test-and-set structure */
+void free_test_and_set(test_and_set_t* tas) {
+   if (!tas) return;
+   free(tas->param);
+   free(tas->oldValue);
+   free(tas->newValue);
+   memset(tas, 0, sizeof(*tas));
 }
 
 /* Free parameter attribute structure */
@@ -212,7 +223,21 @@ cJSON* protocol_handle_request(cJSON* root) {
          cJSON* value = cJSON_GetObjectItem(root, "value");
          if (!cJSON_IsString(param) || !cJSON_IsString(value)) 
             return protocol_build_set_response(id_str, 400, "param+value required");
+            
+         /* Get old value for notification */
+         char* oldValue = NULL;
+         rbus_adapter_get(param->valuestring, &oldValue);
+         
          int rc = rbus_adapter_set(param->valuestring, value->valuestring);
+         
+         /* Send parameter change notification on successful SET */
+         if (rc == 0) {
+            notification_send_param_change(param->valuestring, 
+                                         oldValue ? oldValue : "unknown", 
+                                         value->valuestring, 0, id_str);
+         }
+         
+         if (oldValue) free(oldValue);
          return protocol_build_set_response(id_str, map_status(rc), rc == 0 ? "OK" : "error");
       }
       
@@ -345,6 +370,40 @@ cJSON* protocol_handle_request(cJSON* root) {
          if (!cJSON_IsString(event)) return protocol_build_set_response(id_str, 400, "event required");
          int rc = rbus_adapter_unsubscribe(event->valuestring);
          return protocol_build_set_response(id_str, rc == 0 ? 200 : 500, rc == 0 ? "unsubscribed" : "unsubscribe failed");
+      }
+      
+      case OP_TEST_AND_SET: {
+         cJSON* param = cJSON_GetObjectItem(root, "param");
+         cJSON* oldValue = cJSON_GetObjectItem(root, "oldValue");
+         cJSON* newValue = cJSON_GetObjectItem(root, "newValue");
+         cJSON* dataType = cJSON_GetObjectItem(root, "dataType");
+         
+         if (!cJSON_IsString(param) || !cJSON_IsString(oldValue) || !cJSON_IsString(newValue)) {
+            return protocol_build_set_response(id_str, 400, "param, oldValue, and newValue required");
+         }
+         
+         test_and_set_t tas = {0};
+         tas.param = strdup(param->valuestring);
+         tas.oldValue = strdup(oldValue->valuestring);
+         tas.newValue = strdup(newValue->valuestring);
+         tas.dataType = cJSON_IsNumber(dataType) ? dataType->valueint : 0;
+         
+         int rc = rbus_adapter_test_and_set(&tas);
+         
+         /* Send parameter change notification on successful TEST_AND_SET */
+         if (rc == 0) {
+            notification_send_param_change(tas.param, tas.oldValue, tas.newValue, tas.dataType, id_str);
+         }
+         
+         free_test_and_set(&tas);
+         
+         if (rc == 0) {
+            return protocol_build_set_response(id_str, 200, "Test and set successful");
+         } else if (rc == -10) {
+            return protocol_build_set_response(id_str, 412, "Precondition failed - value mismatch");
+         } else {
+            return protocol_build_set_response(id_str, map_status(rc), "Test and set failed");
+         }
       }
       
       default:

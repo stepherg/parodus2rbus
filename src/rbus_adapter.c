@@ -1,4 +1,5 @@
 #include "rbus_adapter.h"
+#include "cache.h"
 #include "log.h"
 #include <rbus.h>
 #include <stdlib.h>
@@ -47,6 +48,15 @@ void rbus_adapter_close(void) {
 
 int rbus_adapter_get(const char* param, char** outValue) {
    if (!g_handle || !param || !outValue) return -1;
+   
+   /* Try cache first */
+   char* cached_value = NULL;
+   if (cache_get_parameter(param, &cached_value, NULL) == 0) {
+      *outValue = cached_value;
+      LOGD("Cache hit for parameter: %s", param);
+      return 0;
+   }
+   
    rbusValue_t value = NULL;
    rbusError_t rc = rbus_get(g_handle, param, &value);
    if (rc != RBUS_ERROR_SUCCESS) {
@@ -56,6 +66,10 @@ int rbus_adapter_get(const char* param, char** outValue) {
    char* str = rbusValue_ToString(value, NULL, 0);
    if (!str) { rbusValue_Release(value); return -3; }
    *outValue = strdup(str);
+   
+   /* Cache the result */
+   cache_set_parameter(param, str, 0); /* 0 = WebPA string type */
+   
    free(str);
    rbusValue_Release(value);
    return 0;
@@ -93,6 +107,17 @@ static int map_rbus_to_webpa_type(rbusValueType_t t) {
 int rbus_adapter_get_typed(const char* param, char** outValue, int* outType) {
    if(!outType) return -5;
    if (!g_handle || !param || !outValue) return -1;
+   
+   /* Try cache first */
+   char* cached_value = NULL;
+   int cached_type = 0;
+   if (cache_get_parameter(param, &cached_value, &cached_type) == 0) {
+      *outValue = cached_value;
+      *outType = cached_type;
+      LOGD("Cache hit for typed parameter: %s", param);
+      return 0;
+   }
+   
    rbusValue_t value = NULL;
    rbusError_t rc = rbus_get(g_handle, param, &value);
    if (rc != RBUS_ERROR_SUCCESS) {
@@ -103,8 +128,12 @@ int rbus_adapter_get_typed(const char* param, char** outValue, int* outType) {
    char* str = rbusValue_ToString(value, NULL, 0);
    if (!str) { rbusValue_Release(value); return -3; }
    *outValue = strdup(str);
-   free(str);
    *outType = map_rbus_to_webpa_type(t);
+   
+   /* Cache the result with type information */
+   cache_set_parameter(param, str, *outType);
+   
+   free(str);
    rbusValue_Release(value);
    return 0;
 }
@@ -120,6 +149,10 @@ int rbus_adapter_set(const char* param, const char* value) {
       LOGW("rbus_set(%s) failed: %d", param, rc);
       return -2;
    }
+   
+   /* Invalidate cache for this parameter on successful set */
+   cache_invalidate_parameter(param);
+   
    return 0;
 }
 
@@ -363,5 +396,72 @@ int rbus_adapter_set_attributes(const char* param, const param_attribute_t* attr
    } else {
       LOGW("rbus_get(%s) failed for attribute setting: %d", param, rc);
       return -2;
+   }
+}
+
+/* Atomic TEST_AND_SET operation - read current value, test condition, set if matches */
+int rbus_adapter_test_and_set(const test_and_set_t* tas) {
+   if (!g_handle || !tas || !tas->param || !tas->oldValue || !tas->newValue) {
+      LOGE("Invalid TEST_AND_SET parameters: %s", "missing required fields");
+      return -1;
+   }
+   
+   LOGI("TEST_AND_SET: %s, expect=%s, set=%s", tas->param, tas->oldValue, tas->newValue);
+   
+   /* Step 1: Get current value */
+   rbusValue_t currentValue = NULL;
+   rbusError_t rc = rbus_get(g_handle, tas->param, &currentValue);
+   if (rc != RBUS_ERROR_SUCCESS) {
+      LOGW("TEST_AND_SET: Failed to get current value for %s: %d", tas->param, rc);
+      return -(rc + 100); /* Offset RBUS errors by 100 */
+   }
+   
+   /* Step 2: Convert current value to string for comparison */
+   char* currentStr = rbusValue_ToString(currentValue, NULL, 0);
+   rbusValue_Release(currentValue);
+   
+   if (!currentStr) {
+      LOGE("TEST_AND_SET: Failed to convert current value to string for %s: %s", tas->param, "toString failed");
+      return -3;
+   }
+   
+   /* Step 3: Compare current value with expected old value */
+   int valuesMatch = (strcmp(currentStr, tas->oldValue) == 0);
+   free(currentStr);
+   
+   if (!valuesMatch) {
+      LOGI("TEST_AND_SET: Condition failed for %s - values don't match", tas->param);
+      return -10; /* Precondition failed - map to HTTP 412 */
+   }
+   
+   /* Step 4: Values match, proceed with SET operation */
+   rbusValue_t newValue = NULL;
+   rbusValue_Init(&newValue);
+   
+   /* Set value based on data type */
+   switch (tas->dataType) {
+      case 3: /* Boolean */
+         rbusValue_SetBoolean(newValue, (strcmp(tas->newValue, "true") == 0));
+         break;
+      case 1: /* Integer */
+         rbusValue_SetInt32(newValue, atoi(tas->newValue));
+         break;
+      case 2: /* Unsigned integer */
+         rbusValue_SetUInt32(newValue, (uint32_t)atoi(tas->newValue));
+         break;
+      default: /* String (0) and others */
+         rbusValue_SetString(newValue, tas->newValue);
+         break;
+   }
+   
+   rc = rbus_set(g_handle, tas->param, newValue, NULL);
+   rbusValue_Release(newValue);
+   
+   if (rc == RBUS_ERROR_SUCCESS) {
+      LOGI("TEST_AND_SET: Successfully updated %s to %s", tas->param, tas->newValue);
+      return 0;
+   } else {
+      LOGW("TEST_AND_SET: Failed to set new value for %s: %d", tas->param, rc);
+      return -(rc + 100); /* Offset RBUS errors by 100 */
    }
 }

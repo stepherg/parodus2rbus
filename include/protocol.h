@@ -14,7 +14,8 @@ typedef enum {
     OP_DELETE_ROW,
     OP_REPLACE_ROWS,
     OP_SUBSCRIBE,
-    OP_UNSUBSCRIBE
+    OP_UNSUBSCRIBE,
+    OP_TEST_AND_SET
 } operation_type_t;
 
 /* Table data structure for row operations */
@@ -36,6 +37,14 @@ typedef struct {
     char* access;         /* "readOnly", "readWrite", "writeOnly" */
 } param_attribute_t;
 
+/* Test-and-Set structure for atomic conditional updates */
+typedef struct {
+    char* param;          /* parameter name */
+    char* oldValue;       /* expected current value (test condition) */
+    char* newValue;       /* new value to set if test passes */
+    int dataType;         /* data type for validation */
+} test_and_set_t;
+
 /* Build response objects */
 cJSON* protocol_build_get_response(const char* id, int status, cJSON* results /* adopted */);
 cJSON* protocol_build_set_response(const char* id, int status, const char* message);
@@ -49,5 +58,6 @@ cJSON* protocol_handle_request(cJSON* root);
 operation_type_t parse_operation_type(const char* op_string);
 void free_table_row(table_row_t* row);
 void free_param_attribute(param_attribute_t* attr);
+void free_test_and_set(test_and_set_t* tas);
 
 #endif

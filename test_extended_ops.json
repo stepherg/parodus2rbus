@@ -1,0 +1,74 @@
+{
+  "test_cases": [
+    {
+      "name": "GET operation",
+      "request": {
+        "id": "1",
+        "op": "GET",
+        "params": ["Device.DeviceInfo.SerialNumber"]
+      }
+    },
+    {
+      "name": "GET_ATTRIBUTES operation",
+      "request": {
+        "id": "2",
+        "op": "GET_ATTRIBUTES",
+        "param": "Device.DeviceInfo.SerialNumber"
+      }
+    },
+    {
+      "name": "SET_ATTRIBUTES operation",
+      "request": {
+        "id": "3",
+        "op": "SET_ATTRIBUTES",
+        "param": "Device.DeviceInfo.SerialNumber",
+        "attributes": {
+          "notify": 1,
+          "access": "readWrite"
+        }
+      }
+    },
+    {
+      "name": "ADD_ROW operation",
+      "request": {
+        "id": "4",
+        "op": "ADD_ROW",
+        "tableName": "Device.IP.Interface.",
+        "rowData": [
+          {
+            "name": "Enable",
+            "value": "true",
+            "dataType": 3
+          },
+          {
+            "name": "Name",
+            "value": "eth0",
+            "dataType": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "WebPA style GET",
+      "request": {
+        "command": "GET",
+        "names": ["Device.DeviceInfo."]
+      }
+    },
+    {
+      "name": "WebPA style SET_ATTRIBUTES",
+      "request": {
+        "command": "SET_ATTRIBUTES",
+        "parameters": [
+          {
+            "name": "Device.DeviceInfo.SerialNumber",
+            "attributes": {
+              "notify": 1,
+              "access": "readWrite"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

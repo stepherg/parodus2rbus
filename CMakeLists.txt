@@ -80,6 +80,8 @@ add_library(parodus2rbus_objs OBJECT
   src/protocol.c
   src/config.c
   src/log.c
+  src/notification.c
+  src/cache.c
 )
 
 target_include_directories(parodus2rbus_objs PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
